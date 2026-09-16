@@ -1,4 +1,4 @@
-﻿using BepInEx;
+using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -7,9 +7,11 @@ using UnityEngine;
 
 namespace ScrollHotbar
 {
-    [BepInPlugin("com.kurophantom.scrollhotbar", "HotbarScroll", "1.2.4")]
+    [BepInPlugin("com.kurophantom.scrollhotbar", "HotbarScroll", "1.2.5")]
     public class Main : BaseUnityPlugin
     {
+        private const int HotbarSlots = 8;
+
         private readonly Harmony HarmonyInstance = new Harmony("com.kurophantom.scrollhotbar");
         private ManualLogSource logger;
 
@@ -17,7 +19,7 @@ namespace ScrollHotbar
         private ConfigEntry<bool> invertScroll;
 
         private int currentIndex = 0;
-        private float savedZoom;
+        private float savedZoom = 5f;
 
         private float scrollTimer = 0f;
         private float scrollDelay = 0.1f;
@@ -26,11 +28,15 @@ namespace ScrollHotbar
         private float lastScrollValue = 0f;
         private bool scrollJustEnded = false;
 
-        public void Awake()
+        private static FieldInfo distanceField;
+
+        private void Awake()
         {
-            HarmonyInstance.PatchAll();
-            logger = Logger;
-            logger.LogInfo("HotbarScroll mod loaded!");
+            logger = (ManualLogSource)base.Logger;
+            distanceField = typeof(GameCamera).GetField("m_distance",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            if (distanceField == null)
+                logger.LogWarning("GameCamera.m_distance not found — zoom restore disabled");
 
             keybindPreview = Config.Bind(
                 "Hotbar Scroll Settings",
@@ -45,11 +51,16 @@ namespace ScrollHotbar
                 false,
                 "If true, scrolling up selects lower hotbar slots and vice versa."
             );
+
+            HarmonyInstance.PatchAll();
+            logger.LogInfo("HotbarScroll 1.2.5 loaded for Valheim 1.0!");
         }
 
-        public void Update()
+        private void Update()
         {
-            if (Player.m_localPlayer == null || GameCamera.instance == null) return;
+            Player player = Player.m_localPlayer;
+            if (player == null || GameCamera.instance == null) return;
+            if (UiIsBlocking()) return;
 
             float scroll = Input.GetAxis("Mouse ScrollWheel");
             bool isPreviewing = Input.GetKey(keybindPreview.Value);
@@ -58,34 +69,32 @@ namespace ScrollHotbar
 
             GameCamera cam = GameCamera.instance;
 
-            // Save zoom when entering preview
-            if (isPreviewing)
-            {
-                savedZoom = GetCameraZoom(cam);
-            }
+            // Save zoom while the preview key is held
+            if (isPreviewing && distanceField != null)
+                savedZoom = (float)distanceField.GetValue(cam);
 
             // Detect scroll end
             scrollJustEnded = (lastScrollValue != 0f && Mathf.Approximately(scroll, 0f));
             lastScrollValue = scroll;
 
-            if (!isPreviewing && scrollJustEnded)
+            // Restore zoom after a zoom-scroll ends
+            if (!isPreviewing && scrollJustEnded && distanceField != null)
             {
-                float currentZoom = GetCameraZoom(cam);
+                float currentZoom = (float)distanceField.GetValue(cam);
                 if (Mathf.Abs(currentZoom - savedZoom) > 0.0005f)
-                    SetCameraZoom(cam, savedZoom);
+                    distanceField.SetValue(cam, savedZoom);
             }
 
+            // Hotbar scrolling
             if (!isPreviewing && direction != 0)
             {
-                if (direction > 0)
-                    currentIndex = (currentIndex + 1) % 9;
-                else if (direction < 0)
-                    currentIndex = (currentIndex + 7) % 8;
+                if (currentIndex < 0 || currentIndex >= HotbarSlots)
+                    currentIndex = 0;
 
+                // Fixed wrap math: consistent modulo in both directions
+                currentIndex = (currentIndex + HotbarSlots + direction) % HotbarSlots;
                 scrollTimer = scrollDelay;
                 pendingEquip = true;
-
-                logger.LogInfo($"Queued slot: {currentIndex + 1}");
             }
 
             if (pendingEquip)
@@ -93,25 +102,28 @@ namespace ScrollHotbar
                 scrollTimer -= Time.deltaTime;
                 if (scrollTimer <= 0f)
                 {
-                    Player.m_localPlayer.UseHotbarItem(currentIndex);
+                    player.UseHotbarItem(currentIndex);
                     logger.LogInfo($"Equipped slot: {currentIndex + 1}");
                     pendingEquip = false;
                 }
             }
         }
 
-        private float GetCameraZoom(GameCamera cam)
+        private bool UiIsBlocking()
         {
-            return (float)typeof(GameCamera)
-                .GetField("m_distance", BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(cam);
-        }
-
-        private void SetCameraZoom(GameCamera cam, float value)
-        {
-            typeof(GameCamera)
-                .GetField("m_distance", BindingFlags.Instance | BindingFlags.NonPublic)
-                .SetValue(cam, value);
+            try
+            {
+                if (Menu.IsVisible()) return true;
+                if (InventoryGui.instance != null && InventoryGui.IsVisible()) return true;
+                if (Chat.instance != null && Chat.IsVisible()) return true;
+                if (Minimap.instance != null && Minimap.IsVisible()) return true;
+                return false;
+            }
+            catch
+            {
+                // A renamed/removed UI class would throw — fail open so the mod keeps working
+                return false;
+            }
         }
     }
 }
