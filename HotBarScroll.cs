@@ -109,21 +109,23 @@ namespace ScrollHotbar
             }
         }
 
-        private bool UiIsBlocking()
-        {
-            try
-            {
-                if (Menu.IsVisible()) return true;
-                if (InventoryGui.instance != null && InventoryGui.IsVisible()) return true;
-                if (Chat.instance != null && Chat.IsVisible()) return true;
-                if (Minimap.instance != null && Minimap.IsVisible()) return true;
-                return false;
-            }
-            catch
-            {
-                // A renamed/removed UI class would throw — fail open so the mod keeps working
-                return false;
-            }
-        }
+		private bool UiIsBlocking()
+		{
+			try
+			{
+				if (Menu.IsVisible())
+					return true;
+
+				if (InventoryGui.instance != null && InventoryGui.IsVisible())
+					return true;
+
+				return false;
+			}
+			catch
+			{
+				// If a UI API changes in a future update, keep the mod running.
+				return false;
+			}
+		}
     }
 }
