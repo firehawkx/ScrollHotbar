@@ -1,130 +1,265 @@
 using BepInEx;
-using BepInEx.Logging;
 using BepInEx.Configuration;
+using BepInEx.Logging;
 using HarmonyLib;
 using System.Reflection;
 using UnityEngine;
+using System;
+using System.Collections.Generic;
+using System.Reflection.Emit;
 
 namespace ScrollHotbar
 {
-    [BepInPlugin("com.kurophantom.scrollhotbar", "HotbarScroll", "1.2.5")]
+    [BepInPlugin("com.kurophantom.scrollhotbar", "HotbarScroll", "1.2.6")]
     public class Main : BaseUnityPlugin
     {
         private const int HotbarSlots = 8;
 
-        private readonly Harmony HarmonyInstance = new Harmony("com.kurophantom.scrollhotbar");
+        internal static ConfigEntry<KeyCode> PreviewKey;
+        internal static ConfigEntry<bool> InvertScroll;
+
+        private readonly Harmony harmony = new Harmony("com.kurophantom.scrollhotbar");
         private ManualLogSource logger;
 
-        private ConfigEntry<KeyCode> keybindPreview;
-        private ConfigEntry<bool> invertScroll;
+		internal static Main Instance { get; private set; }
 
-        private int currentIndex = 0;
-        private float savedZoom = 5f;
+		internal static void LogWarning(string message)
+		{
+			Instance?.logger.LogWarning(message);
+		}
 
-        private float scrollTimer = 0f;
-        private float scrollDelay = 0.1f;
-        private bool pendingEquip = false;
+		internal static void LogInfo(string message)
+		{
+			Instance?.logger.LogInfo(message);
+		}
 
-        private float lastScrollValue = 0f;
-        private bool scrollJustEnded = false;
+        private int currentIndex = -1;
+        private int pendingIndex = -1;
+        private float pendingTimer;
+        private const float SelectionDelay = 0.05f;
 
-        private static FieldInfo distanceField;
+		private void Awake()
+		{
+			Instance = this;
+			logger = base.Logger;
 
-        private void Awake()
-        {
-            logger = (ManualLogSource)base.Logger;
-            distanceField = typeof(GameCamera).GetField("m_distance",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            if (distanceField == null)
-                logger.LogWarning("GameCamera.m_distance not found — zoom restore disabled");
+			PreviewKey = Config.Bind(
+				"Hotbar Scroll Settings",
+				"Preview Key",
+				KeyCode.LeftControl,
+				"Hold this key to allow the mouse wheel to control camera zoom."
+			);
 
-            keybindPreview = Config.Bind(
-                "Hotbar Scroll Settings",
-                "Preview Key",
-                KeyCode.LeftControl,
-                "Key used to activate hotbar preview scrolling."
-            );
+			InvertScroll = Config.Bind(
+				"Hotbar Scroll Settings",
+				"Invert Scroll Direction",
+				false,
+				"If true, scrolling up selects lower hotbar slots and vice versa."
+			);
 
-            invertScroll = Config.Bind(
-                "Hotbar Scroll Settings",
-                "Invert Scroll Direction",
-                false,
-                "If true, scrolling up selects lower hotbar slots and vice versa."
-            );
+			harmony.PatchAll();
 
-            HarmonyInstance.PatchAll();
-            logger.LogInfo("HotbarScroll 1.2.5 loaded for Valheim 1.0!");
-        }
+			logger.LogInfo("HotbarScroll 1.2.6 loaded");
+		}
 
         private void Update()
         {
             Player player = Player.m_localPlayer;
-            if (player == null || GameCamera.instance == null) return;
-            if (UiIsBlocking()) return;
+            if (player == null)
+                return;
+
+			// While the preview key is held, the mouse wheel belongs to the camera.
+			if (PreviewKey != null &&
+				Input.GetKey(PreviewKey.Value))
+			{
+				pendingIndex = -1;
+				pendingTimer = 0f;
+				return;
+			}
+
+            if (UiIsBlocking())
+            {
+                pendingIndex = -1;
+                pendingTimer = 0f;
+                return;
+            }
+
+            if (currentIndex < 0)
+                currentIndex = GetCurrentHotbarIndex(player);
 
             float scroll = Input.GetAxis("Mouse ScrollWheel");
-            bool isPreviewing = Input.GetKey(keybindPreview.Value);
-            int direction = scroll > 0f ? 1 : scroll < 0f ? -1 : 0;
-            if (invertScroll.Value) direction *= -1;
 
-            GameCamera cam = GameCamera.instance;
-
-            // Save zoom while the preview key is held
-            if (isPreviewing && distanceField != null)
-                savedZoom = (float)distanceField.GetValue(cam);
-
-            // Detect scroll end
-            scrollJustEnded = (lastScrollValue != 0f && Mathf.Approximately(scroll, 0f));
-            lastScrollValue = scroll;
-
-            // Restore zoom after a zoom-scroll ends
-            if (!isPreviewing && scrollJustEnded && distanceField != null)
+            // Do not create a direction when the wheel is stationary.
+            if (!Mathf.Approximately(scroll, 0f))
             {
-                float currentZoom = (float)distanceField.GetValue(cam);
-                if (Mathf.Abs(currentZoom - savedZoom) > 0.0005f)
-                    distanceField.SetValue(cam, savedZoom);
+                int direction = scroll > 0f ? 1 : -1;
+                if (InvertScroll.Value)
+                    direction = -direction;
+
+                int baseIndex = pendingIndex >= 0 ? pendingIndex : currentIndex;
+                pendingIndex = WrapIndex(baseIndex + direction);
+                pendingTimer = SelectionDelay;
             }
 
-            // Hotbar scrolling
-            if (!isPreviewing && direction != 0)
+            // One pending destination only. Rapid scrolling replaces the target;
+            // it does not queue intermediate equip operations.
+            if (pendingIndex >= 0)
             {
-                if (currentIndex < 0 || currentIndex >= HotbarSlots)
-                    currentIndex = 0;
-
-                // Fixed wrap math: consistent modulo in both directions
-                currentIndex = (currentIndex + HotbarSlots + direction) % HotbarSlots;
-                scrollTimer = scrollDelay;
-                pendingEquip = true;
-            }
-
-            if (pendingEquip)
-            {
-                scrollTimer -= Time.deltaTime;
-                if (scrollTimer <= 0f)
+                pendingTimer -= Time.deltaTime;
+                if (pendingTimer <= 0f)
                 {
-                    player.UseHotbarItem(currentIndex);
-                    logger.LogInfo($"Equipped slot: {currentIndex + 1}");
-                    pendingEquip = false;
+                    int target = pendingIndex;
+                    pendingIndex = -1;
+                    currentIndex = target;
+                    SelectHotbarSlot(player, target);
                 }
             }
         }
 
-		private bool UiIsBlocking()
+        private static int WrapIndex(int index)
+        {
+            if (index >= HotbarSlots)
+                return index % HotbarSlots;
+
+            if (index < 0)
+                return (index % HotbarSlots + HotbarSlots) % HotbarSlots;
+
+            return index;
+        }
+
+        private int GetCurrentHotbarIndex(Player player)
+        {
+            if (player.m_inventory == null)
+                return 0;
+
+            ItemDrop.ItemData currentItem = player.GetRightItem();
+            if (currentItem == null)
+                return 0;
+
+            for (int i = 0; i < HotbarSlots; i++)
+            {
+                ItemDrop.ItemData item = player.m_inventory.GetItemAt(i, 0);
+                if (item == currentItem)
+                    return i;
+            }
+
+            return 0;
+        }
+
+        private void SelectHotbarSlot(Player player, int index)
+        {
+            if (player.m_inventory == null || index < 0 || index >= HotbarSlots)
+                return;
+
+            ItemDrop.ItemData item = player.m_inventory.GetItemAt(index, 0);
+            if (item == null)
+            {
+                logger.LogInfo($"Slot {index + 1} is empty");
+                return;
+            }
+
+            player.EquipItem(item);
+            logger.LogInfo($"Equipped slot {index + 1} ({item.m_shared.m_name})");
+        }
+
+        private bool UiIsBlocking()
+        {
+            try
+            {
+                if (Menu.IsVisible())
+                    return true;
+
+                if (InventoryGui.instance != null && InventoryGui.IsVisible())
+                    return true;
+            }
+            catch
+            {
+                // Keep the plugin alive if a UI API changes.
+            }
+
+            return false;
+        }
+
+		[HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
+		internal static class GameCameraUpdatePatch
 		{
-			try
+			private static readonly MethodInfo GetMouseScrollWheelMethod =
+				AccessTools.Method(
+					"ZInput:GetMouseScrollWheel",
+					new Type[0]
+				);
+
+			private static readonly MethodInfo GetCameraScrollMethod =
+				AccessTools.Method(
+					typeof(GameCameraUpdatePatch),
+					nameof(GetCameraScroll)
+				);
+
+			private static float GetCameraScroll()
 			{
-				if (Menu.IsVisible())
-					return true;
+				if (Main.PreviewKey != null &&
+					Input.GetKey(Main.PreviewKey.Value))
+				{
+					return GetOriginalScrollWheel();
+				}
 
-				if (InventoryGui.instance != null && InventoryGui.IsVisible())
-					return true;
-
-				return false;
+				return 0f;
 			}
-			catch
+
+			private static float GetOriginalScrollWheel()
 			{
-				// If a UI API changes in a future update, keep the mod running.
-				return false;
+				if (GetMouseScrollWheelMethod == null)
+					return 0f;
+
+				try
+				{
+					object result = GetMouseScrollWheelMethod.Invoke(null, null);
+					return result is float value ? value : 0f;
+				}
+				catch
+				{
+					return 0f;
+				}
+			}
+
+			private static IEnumerable<CodeInstruction> Transpiler(
+				IEnumerable<CodeInstruction> instructions)
+			{
+				bool replaced = false;
+
+				foreach (CodeInstruction instruction in instructions)
+				{
+					if (GetMouseScrollWheelMethod != null &&
+						instruction.opcode == OpCodes.Call &&
+						instruction.operand is MethodInfo calledMethod &&
+						calledMethod == GetMouseScrollWheelMethod)
+					{
+						yield return new CodeInstruction(
+							OpCodes.Call,
+							GetCameraScrollMethod
+						);
+
+						replaced = true;
+					}
+					else
+					{
+						yield return instruction;
+					}
+				}
+
+				if (!replaced)
+				{
+					Main.LogWarning(
+						"ScrollHotbar could not find ZInput.GetMouseScrollWheel " +
+						"inside GameCamera.UpdateCamera."
+					);
+				}
+				else
+				{
+					Main.LogInfo(
+						"ScrollHotbar patched GameCamera.UpdateCamera wheel input."
+					);
+				}
 			}
 		}
     }
