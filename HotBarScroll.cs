@@ -162,23 +162,30 @@ namespace ScrollHotbar
             logger.LogInfo($"Equipped slot {index + 1} ({item.m_shared.m_name})");
         }
 
-        private bool UiIsBlocking()
-        {
-            try
-            {
-                if (Menu.IsVisible())
-                    return true;
+         private bool UiIsBlocking()
+         {
+             try
+             {
+                 if (Menu.IsVisible())
+                     return true;
 
-                if (InventoryGui.instance != null && InventoryGui.IsVisible())
-                    return true;
-            }
-            catch
-            {
-                // Keep the plugin alive if a UI API changes.
-            }
+                 if (InventoryGui.instance != null && InventoryGui.IsVisible())
+                     return true;
 
-            return false;
-        }
+                 if (Minimap.IsOpen())
+                     return true;
+
+                 Player player = Player.m_localPlayer;
+                 if (player != null && player.InPlaceMode() && player.GetRightItem()?.m_shared.m_name == "$item_hammer")
+                     return true;
+             }
+             catch
+             {
+                 // Keep the plugin alive if a UI API changes.
+             }
+
+             return false;
+         }
 
 		[HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
 		internal static class GameCameraUpdatePatch
