@@ -10,15 +10,15 @@ using System.Reflection.Emit;
 
 namespace ScrollHotbar
 {
-    [BepInPlugin("com.kurophantom.scrollhotbar", "HotbarScroll", "1.2.6")]
+    [BepInPlugin("ScrollHotbar", "HotbarScroll", "1.2.6")]
     public class Main : BaseUnityPlugin
     {
         private const int HotbarSlots = 8;
 
-        internal static ConfigEntry<KeyCode> PreviewKey;
+        internal static ConfigEntry<KeyCode> CameraZoomKey;
         internal static ConfigEntry<bool> InvertScroll;
 
-        private readonly Harmony harmony = new Harmony("com.kurophantom.scrollhotbar");
+        private readonly Harmony harmony = new Harmony("ScrollHotbar");
         private ManualLogSource logger;
 
 		internal static Main Instance { get; private set; }
@@ -43,9 +43,9 @@ namespace ScrollHotbar
 			Instance = this;
 			logger = base.Logger;
 
-			PreviewKey = Config.Bind(
+			CameraZoomKey = Config.Bind(
 				"Hotbar Scroll Settings",
-				"Preview Key",
+				"Camera Zoom Key",
 				KeyCode.LeftControl,
 				"Hold this key to allow the mouse wheel to control camera zoom."
 			);
@@ -69,8 +69,8 @@ namespace ScrollHotbar
                 return;
 
 			// While the preview key is held, the mouse wheel belongs to the camera.
-			if (PreviewKey != null &&
-				Input.GetKey(PreviewKey.Value))
+			if (CameraZoomKey != null &&
+				Input.GetKey(CameraZoomKey.Value))
 			{
 				pendingIndex = -1;
 				pendingTimer = 0f;
@@ -176,7 +176,7 @@ namespace ScrollHotbar
                      return true;
 
                  Player player = Player.m_localPlayer;
-                 if (player != null && player.InPlaceMode() && player.GetRightItem()?.m_shared.m_name == "$item_hammer")
+                 if (player != null && player.InPlaceMode() && (player.GetRightItem()?.m_shared.m_name == "$item_hammer" || player.GetRightItem()?.m_shared.m_name == "$item_cultivator" || player.GetRightItem()?.m_shared.m_name == "$item_hoe"))
                      return true;
              }
              catch
@@ -204,8 +204,8 @@ namespace ScrollHotbar
 
 			private static float GetCameraScroll()
 			{
-				if (Main.PreviewKey != null &&
-					Input.GetKey(Main.PreviewKey.Value))
+				if (Main.CameraZoomKey != null &&
+					Input.GetKey(Main.CameraZoomKey.Value))
 				{
 					return GetOriginalScrollWheel();
 				}
