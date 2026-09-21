@@ -84,14 +84,27 @@ namespace ScrollHotbar
                 return;
             }
 
-            if (currentIndex < 0)
-                currentIndex = GetCurrentHotbarIndex(player);
+            if (currentIndex >= 0)
+            {
+                for (int i = 0; i < HotbarSlots; i++)
+                {
+                    if (Input.GetKeyDown((KeyCode)(KeyCode.Alpha1 + i)) ||
+                        Input.GetKeyDown((KeyCode)(KeyCode.Keypad1 + i)))
+                    {
+                        currentIndex = -1;
+                        break;
+                    }
+                }
+            }
 
             float scroll = Input.GetAxis("Mouse ScrollWheel");
 
             // Do not create a direction when the wheel is stationary.
             if (!Mathf.Approximately(scroll, 0f))
             {
+                if (currentIndex < 0)
+                    currentIndex = GetCurrentHotbarIndex(player);
+
                 int direction = scroll > 0f ? 1 : -1;
                 if (InvertScroll.Value)
                     direction = -direction;
