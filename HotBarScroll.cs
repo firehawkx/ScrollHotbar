@@ -17,6 +17,7 @@ namespace ScrollHotbar
 
         internal static ConfigEntry<KeyCode> CameraZoomKey;
         internal static ConfigEntry<bool> InvertScroll;
+        internal static ConfigEntry<string> IgnoredItems;
 
         private readonly Harmony harmony = new Harmony("ScrollHotbar");
         private ManualLogSource logger;
@@ -57,6 +58,13 @@ namespace ScrollHotbar
 				"If true, scrolling up selects lower hotbar slots and vice versa."
 			);
 
+			IgnoredItems = Config.Bind(
+				"Hotbar Scroll Settings",
+				"Ignored Items",
+				"$item_hammer, $item_cultivator, $item_hoe",
+				"Comma-separated list of item names that will not scroll the hotbar when held. Example: $item_hammer, $item_cultivator, $item_hoe"
+			);
+
 			harmony.PatchAll();
 
 			logger.LogInfo("HotbarScroll 1.2.6 loaded");
@@ -84,16 +92,15 @@ namespace ScrollHotbar
                 return;
             }
 
-            if (currentIndex >= 0)
+            for (int i = 0; i < HotbarSlots; i++)
             {
-                for (int i = 0; i < HotbarSlots; i++)
+                if (Input.GetKeyDown((KeyCode)(KeyCode.Alpha1 + i)) ||
+                    Input.GetKeyDown((KeyCode)(KeyCode.Keypad1 + i)))
                 {
-                    if (Input.GetKeyDown((KeyCode)(KeyCode.Alpha1 + i)) ||
-                        Input.GetKeyDown((KeyCode)(KeyCode.Keypad1 + i)))
-                    {
-                        currentIndex = -1;
-                        break;
-                    }
+                    currentIndex = i;
+                    pendingIndex = -1;
+                    pendingTimer = 0f;
+                    break;
                 }
             }
 
@@ -175,30 +182,45 @@ namespace ScrollHotbar
             logger.LogInfo($"Equipped slot {index + 1} ({item.m_shared.m_name})");
         }
 
-         private bool UiIsBlocking()
-         {
-             try
-             {
-                 if (Menu.IsVisible())
-                     return true;
+		private bool UiIsBlocking()
+		{
+			try
+			{
+				if (Menu.IsVisible())
+					return true;
 
-                 if (InventoryGui.instance != null && InventoryGui.IsVisible())
-                     return true;
+				if (InventoryGui.instance != null && InventoryGui.IsVisible())
+					return true;
 
-                 if (Minimap.IsOpen())
-                     return true;
+				if (Minimap.IsOpen())
+					return true;
 
-                 Player player = Player.m_localPlayer;
-                 if (player != null && player.InPlaceMode() && (player.GetRightItem()?.m_shared.m_name == "$item_hammer" || player.GetRightItem()?.m_shared.m_name == "$item_cultivator" || player.GetRightItem()?.m_shared.m_name == "$item_hoe"))
-                     return true;
-             }
-             catch
-             {
-                 // Keep the plugin alive if a UI API changes.
-             }
+				Player player = Player.m_localPlayer;
+				if (player != null && player.InPlaceMode() && IsIgnoredItem(player.GetRightItem()))
+					return true;
+			}
+			catch
+			{
+				// Keep the plugin alive if a UI API changes.
+			}
 
-             return false;
-         }
+			return false;
+		}
+
+		private static bool IsIgnoredItem(ItemDrop.ItemData item)
+		{
+			if (item == null)
+				return false;
+
+			string itemName = item.m_shared.m_name;
+			string ignored = IgnoredItems?.Value ?? "";
+			foreach (string part in ignored.Split(','))
+			{
+				if (part.Trim() == itemName)
+					return true;
+			}
+			return false;
+		}
 
 		[HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
 		internal static class GameCameraUpdatePatch
