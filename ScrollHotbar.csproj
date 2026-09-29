@@ -36,6 +36,11 @@
       <Private>false</Private>
     </Reference>
 
+    <Reference Include="assembly_utils" Publicize="true">
+      <HintPath>$(GameManaged)\assembly_utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
     <Reference Include="UnityEngine">
       <HintPath>$(GameManaged)\UnityEngine.dll</HintPath>
       <Private>false</Private>

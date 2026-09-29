@@ -2,11 +2,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
-using System.Reflection;
 using UnityEngine;
-using System;
-using System.Collections.Generic;
-using System.Reflection.Emit;
 
 namespace ScrollHotbar
 {
@@ -182,21 +178,47 @@ namespace ScrollHotbar
             logger.LogInfo($"Equipped slot {index + 1} ({item.m_shared.m_name})");
         }
 
-		private bool UiIsBlocking()
+		internal bool UiIsBlocking()
 		{
+			// Each check is isolated so a failing/patched API cannot disable
+			// the other checks. In particular Player.InPlaceMode() is patched
+			// by other mods (e.g. EasyRelocate), so the ignored-item check
+			// deliberately does not depend on it: holding an ignored tool
+			// bypasses hotbar scroll whether or not place mode is active.
 			try
 			{
 				if (Menu.IsVisible())
 					return true;
+			}
+			catch
+			{
+				// Keep the plugin alive if a UI API changes.
+			}
 
+			try
+			{
 				if (InventoryGui.instance != null && InventoryGui.IsVisible())
 					return true;
+			}
+			catch
+			{
+				// Keep the plugin alive if a UI API changes.
+			}
 
+			try
+			{
 				if (Minimap.IsOpen())
 					return true;
+			}
+			catch
+			{
+				// Keep the plugin alive if a UI API changes.
+			}
 
+			try
+			{
 				Player player = Player.m_localPlayer;
-				if (player != null && player.InPlaceMode() && IsIgnoredItem(player.GetRightItem()))
+				if (player != null && IsIgnoredItem(player.GetRightItem()))
 					return true;
 			}
 			catch
@@ -222,86 +244,38 @@ namespace ScrollHotbar
 			return false;
 		}
 
-		[HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
-		internal static class GameCameraUpdatePatch
+		// Suppress the camera zoom at the source instead of transpiling
+		// GameCamera.UpdateCamera. A transpiler looking for the
+		// ZInput.GetMouseScrollWheel call breaks when another mod (e.g.
+		// SmarterHoe) transpiles the same method first and removes that call.
+		// A prefix on ZInput.GetMouseScrollWheel is order-independent: the
+		// hotbar keeps reading the raw wheel via Input.GetAxis while the
+		// camera (and any other ZInput reader) sees 0.
+		[HarmonyPatch(typeof(ZInput), "GetMouseScrollWheel")]
+		internal static class ZInputMouseScrollPatch
 		{
-			private static readonly MethodInfo GetMouseScrollWheelMethod =
-				AccessTools.Method(
-					"ZInput:GetMouseScrollWheel",
-					new Type[0]
-				);
-
-			private static readonly MethodInfo GetCameraScrollMethod =
-				AccessTools.Method(
-					typeof(GameCameraUpdatePatch),
-					nameof(GetCameraScroll)
-				);
-
-			private static float GetCameraScroll()
+			private static bool Prefix(ref float __result)
 			{
+				Main main = Main.Instance;
+				if (main == null)
+					return true;
+
+				Player player = Player.m_localPlayer;
+				if (player == null)
+					return true;
+
+				// Zoom key held: wheel belongs to the camera.
 				if (Main.CameraZoomKey != null &&
 					Input.GetKey(Main.CameraZoomKey.Value))
-				{
-					return GetOriginalScrollWheel();
-				}
+					return true;
 
-				return 0f;
-			}
+				// Menus, map, or ignored build tools: leave the wheel alone so
+				// other mods (map pins, hoe radius, relocate, ...) keep working.
+				if (main.UiIsBlocking())
+					return true;
 
-			private static float GetOriginalScrollWheel()
-			{
-				if (GetMouseScrollWheelMethod == null)
-					return 0f;
-
-				try
-				{
-					object result = GetMouseScrollWheelMethod.Invoke(null, null);
-					return result is float value ? value : 0f;
-				}
-				catch
-				{
-					return 0f;
-				}
-			}
-
-			private static IEnumerable<CodeInstruction> Transpiler(
-				IEnumerable<CodeInstruction> instructions)
-			{
-				bool replaced = false;
-
-				foreach (CodeInstruction instruction in instructions)
-				{
-					if (GetMouseScrollWheelMethod != null &&
-						instruction.opcode == OpCodes.Call &&
-						instruction.operand is MethodInfo calledMethod &&
-						calledMethod == GetMouseScrollWheelMethod)
-					{
-						yield return new CodeInstruction(
-							OpCodes.Call,
-							GetCameraScrollMethod
-						);
-
-						replaced = true;
-					}
-					else
-					{
-						yield return instruction;
-					}
-				}
-
-				if (!replaced)
-				{
-					Main.LogWarning(
-						"ScrollHotbar could not find ZInput.GetMouseScrollWheel " +
-						"inside GameCamera.UpdateCamera."
-					);
-				}
-				else
-				{
-					Main.LogInfo(
-						"ScrollHotbar patched GameCamera.UpdateCamera wheel input."
-					);
-				}
+				__result = 0f;
+				return false;
 			}
 		}
     }
